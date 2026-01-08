@@ -1,0 +1,1508 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sudoku — Beautiful, Fast, Friendly</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  <style>
+    :root {
+      --bg0: #050816;
+      --bg1: #0b122a;
+      --card: rgba(255,255,255,.06);
+      --card2: rgba(255,255,255,.09);
+      --stroke: rgba(148,163,184,.35);
+      --stroke2: rgba(148,163,184,.5);
+      --good: rgba(34,197,94,.9);
+      --warn: rgba(251,146,60,.9);
+      --bad: rgba(244,63,94,.95);
+    }
+
+    /* Subtle background pattern */
+    .bg-pattern {
+      background:
+        radial-gradient(1200px 800px at 10% 10%, rgba(56,189,248,.22), transparent 55%),
+        radial-gradient(900px 650px at 90% 15%, rgba(168,85,247,.20), transparent 55%),
+        radial-gradient(900px 700px at 30% 95%, rgba(34,197,94,.12), transparent 60%),
+        linear-gradient(180deg, var(--bg0), var(--bg1));
+    }
+
+    /* Board borders (thicker 3x3 separators) */
+    .cell {
+      border: 1px solid var(--stroke);
+      -webkit-tap-highlight-color: transparent;
+    }
+    .cell[data-thick-left="1"] { border-left-width: 3px; border-left-color: var(--stroke2); }
+    .cell[data-thick-right="1"] { border-right-width: 3px; border-right-color: var(--stroke2); }
+    .cell[data-thick-top="1"] { border-top-width: 3px; border-top-color: var(--stroke2); }
+    .cell[data-thick-bottom="1"] { border-bottom-width: 3px; border-bottom-color: var(--stroke2); }
+
+    /* Check overlay border (green=correct, red=wrong)
+       Uses an inset overlay so it doesn't fight the board's thick separators. */
+    .cell::after {
+      content: "";
+      position: absolute;
+      inset: 3px;
+      border-radius: 0.8rem;
+      border: 2px solid transparent;
+      box-shadow: 0 0 0 0 rgba(0,0,0,0);
+      transition: border-color 150ms ease, box-shadow 150ms ease;
+      pointer-events: none;
+    }
+    .cell[data-check="good"]::after {
+      border-color: rgba(34,197,94,.95);
+      box-shadow: 0 0 0 1px rgba(34,197,94,.32);
+    }
+    .cell[data-check="bad"]::after {
+      border-color: rgba(244,63,94,.95);
+      box-shadow: 0 0 0 1px rgba(244,63,94,.35);
+    }
+
+    /* Prevent layout shift when notes shown */
+    .cellValue { line-height: 1; }
+
+    /* Confetti canvas */
+    #confettiCanvas { pointer-events: none; }
+
+    /* Focus style for keyboard users */
+    .cell:focus-visible {
+      outline: none;
+      box-shadow: 0 0 0 3px rgba(56,189,248,.35), 0 0 0 1px rgba(56,189,248,.65) inset;
+    }
+
+    /* Nice scrollbar (where supported) */
+    * { scrollbar-color: rgba(148,163,184,.35) transparent; }
+
+    textarea::-webkit-scrollbar { height: 10px; width: 10px; }
+    textarea::-webkit-scrollbar-thumb { background: rgba(148,163,184,.25); border-radius: 999px; }
+  </style>
+</head>
+
+<body class="bg-pattern min-h-screen text-slate-100">
+  <canvas id="confettiCanvas" class="fixed inset-0 w-full h-full hidden"></canvas>
+
+  <div class="mx-auto max-w-6xl px-4 py-6 sm:py-10">
+    <header class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+      <div>
+        <div class="inline-flex items-center gap-2">
+          <div class="h-9 w-9 rounded-xl bg-white/10 ring-1 ring-white/10 grid place-items-center">
+            <span class="font-black text-xl">S</span>
+          </div>
+          <h1 class="text-2xl sm:text-3xl font-extrabold tracking-tight">Sudoku</h1>
+        </div>
+        <p class="mt-2 text-sm sm:text-base text-slate-300 max-w-xl">
+          Notes, undo, hints, conflict highlighting, keyboard support — and puzzles generated with a <span class="text-slate-100 font-semibold">unique solution</span>.
+        </p>
+      </div>
+
+      <div class="flex flex-wrap gap-2 sm:gap-3 items-center">
+        <div class="rounded-2xl bg-white/5 ring-1 ring-white/10 p-2 flex items-center gap-2">
+          <label class="text-xs text-slate-300" for="difficulty">Difficulty</label>
+          <select id="difficulty" class="bg-transparent text-slate-100 text-sm font-semibold outline-none">
+            <option value="easy">Easy</option>
+            <option value="medium" selected>Medium</option>
+            <option value="hard">Hard</option>
+            <option value="expert">Expert</option>
+          </select>
+        </div>
+
+        <button id="newGameBtn" class="rounded-2xl px-4 py-2 bg-sky-400/15 hover:bg-sky-400/20 ring-1 ring-sky-300/30 text-sky-100 font-semibold transition">
+          New game
+        </button>
+
+        <button id="themeBtn" class="rounded-2xl px-4 py-2 bg-white/5 hover:bg-white/10 ring-1 ring-white/10 font-semibold transition" aria-label="Toggle theme">
+          Toggle contrast
+        </button>
+      </div>
+    </header>
+
+    <main class="mt-6 sm:mt-8 grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-5 sm:gap-6">
+      <!-- Board card -->
+      <section class="rounded-3xl bg-white/5 ring-1 ring-white/10 shadow-[0_20px_80px_rgba(0,0,0,.35)] overflow-hidden">
+        <div class="p-4 sm:p-5 flex flex-col gap-4">
+          <div class="flex flex-wrap gap-2 items-center justify-between">
+            <div class="flex items-center gap-3">
+              <div class="rounded-2xl bg-white/5 ring-1 ring-white/10 px-3 py-2">
+                <div class="text-xs text-slate-300">Time</div>
+                <div id="timer" class="font-extrabold tracking-tight text-lg">00:00</div>
+              </div>
+
+              <div class="rounded-2xl bg-white/5 ring-1 ring-white/10 px-3 py-2">
+                <div class="text-xs text-slate-300">Hints</div>
+                <div class="font-extrabold tracking-tight text-lg"><span id="hintsLeft">3</span> left</div>
+              </div>
+
+              <div class="hidden sm:block rounded-2xl bg-white/5 ring-1 ring-white/10 px-3 py-2">
+                <div class="text-xs text-slate-300">Status</div>
+                <div id="statusText" class="font-extrabold tracking-tight text-lg">In progress</div>
+              </div>
+            </div>
+
+            <div class="flex flex-wrap gap-2">
+              <button id="notesBtn" class="rounded-2xl px-3 py-2 bg-white/5 hover:bg-white/10 ring-1 ring-white/10 font-semibold transition">
+                Notes: <span id="notesState" class="font-extrabold">Off</span>
+              </button>
+              <button id="undoBtn" class="rounded-2xl px-3 py-2 bg-white/5 hover:bg-white/10 ring-1 ring-white/10 font-semibold transition" title="Undo (Ctrl/Cmd+Z)">
+                Undo
+              </button>
+              <button id="checkBtn" class="rounded-2xl px-3 py-2 bg-white/5 hover:bg-white/10 ring-1 ring-white/10 font-semibold transition" title="Highlight incorrect entries vs the solution">
+                Check
+              </button>
+              <button id="hintBtn" class="rounded-2xl px-3 py-2 bg-emerald-400/15 hover:bg-emerald-400/20 ring-1 ring-emerald-300/30 text-emerald-100 font-semibold transition">
+                Hint
+              </button>
+              <button id="solveBtn" class="rounded-2xl px-3 py-2 bg-rose-400/15 hover:bg-rose-400/20 ring-1 ring-rose-300/30 text-rose-100 font-semibold transition">
+                Solve
+              </button>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-[1fr_220px] gap-4">
+            <div class="relative">
+              <div class="rounded-3xl bg-white/3 ring-1 ring-white/10 p-3 sm:p-4">
+                <div id="board" class="aspect-square w-full grid grid-cols-9 gap-1.5 select-none"></div>
+              </div>
+              <div class="mt-3 text-xs text-slate-300 leading-relaxed">
+                <span class="font-semibold text-slate-100">Keyboard:</span>
+                1–9 to place, 0/Backspace to erase, <span class="font-semibold text-slate-100">N</span> for notes, <span class="font-semibold text-slate-100">H</span> hint, <span class="font-semibold text-slate-100">Ctrl/Cmd+Z</span> undo.
+              </div>
+            </div>
+
+            <aside class="rounded-3xl bg-white/3 ring-1 ring-white/10 p-3 sm:p-4 flex flex-col gap-3">
+              <div class="flex items-end justify-between">
+                <div>
+                  <div class="text-xs text-slate-300">Number pad</div>
+                  <div class="text-sm font-semibold">Tap or press keys</div>
+                </div>
+                <button id="eraseBtn" class="text-sm rounded-2xl px-3 py-2 bg-white/5 hover:bg-white/10 ring-1 ring-white/10 font-semibold transition" title="Erase (Backspace)">
+                  Erase
+                </button>
+              </div>
+
+              <div id="pad" class="grid grid-cols-3 gap-2"></div>
+
+              <div class="mt-1 rounded-2xl bg-white/5 ring-1 ring-white/10 p-3">
+                <div class="text-xs text-slate-300">Tip</div>
+                <div class="text-sm text-slate-100/90">Select a cell, then place a number. Toggle Notes to jot candidates.</div>
+              </div>
+
+              <div id="toast" class="hidden rounded-2xl p-3 ring-1"></div>
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right panel -->
+      <section class="rounded-3xl bg-white/5 ring-1 ring-white/10 shadow-[0_20px_80px_rgba(0,0,0,.35)] overflow-hidden">
+        <div class="p-4 sm:p-5 flex flex-col gap-4">
+          <div class="flex items-center justify-between">
+            <h2 class="text-lg font-extrabold tracking-tight">Progress</h2>
+            <div class="text-xs text-slate-300">Auto highlights</div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div class="rounded-2xl bg-white/5 ring-1 ring-white/10 p-3">
+              <div class="text-xs text-slate-300">Filled</div>
+              <div class="text-2xl font-black"><span id="filledCount">0</span><span class="text-slate-300 font-semibold text-base">/81</span></div>
+            </div>
+            <div class="rounded-2xl bg-white/5 ring-1 ring-white/10 p-3">
+              <div class="text-xs text-slate-300">Mistakes</div>
+              <div class="text-2xl font-black"><span id="mistakeCount">0</span></div>
+            </div>
+          </div>
+
+          <div class="rounded-2xl bg-white/5 ring-1 ring-white/10 p-3">
+            <div class="text-xs text-slate-300">What’s highlighted?</div>
+            <ul class="mt-2 text-sm text-slate-200/90 space-y-1">
+              <li><span class="font-semibold text-slate-100">Blue:</span> selection + row/column/box</li>
+              <li><span class="font-semibold text-slate-100">Violet:</span> same number as selected</li>
+              <li><span class="font-semibold text-slate-100">Amber:</span> conflicts (duplicate in row/col/box)</li>
+              <li><span class="font-semibold text-slate-100">Red:</span> incorrect entries (via Check / animation)</li>
+            </ul>
+          </div>
+
+          <div class="rounded-2xl bg-white/5 ring-1 ring-white/10 p-3">
+            <div class="text-xs text-slate-300">Shortcuts</div>
+            <div class="mt-2 grid grid-cols-2 gap-2 text-sm">
+              <div class="rounded-xl bg-white/5 ring-1 ring-white/10 px-2 py-2"><span class="font-semibold">N</span> Notes</div>
+              <div class="rounded-xl bg-white/5 ring-1 ring-white/10 px-2 py-2"><span class="font-semibold">H</span> Hint</div>
+              <div class="rounded-xl bg-white/5 ring-1 ring-white/10 px-2 py-2"><span class="font-semibold">0</span> Erase</div>
+              <div class="rounded-xl bg-white/5 ring-1 ring-white/10 px-2 py-2"><span class="font-semibold">Ctrl/Cmd+Z</span> Undo</div>
+            </div>
+          </div>
+
+          <div class="rounded-2xl bg-white/5 ring-1 ring-white/10 p-3">
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <div class="text-xs text-slate-300">Animation</div>
+                <div class="text-sm font-semibold">Paste JSON frames (81 cells each)</div>
+              </div>
+              <button id="animSampleBtn" class="text-xs rounded-xl px-2 py-1 bg-white/5 hover:bg-white/10 ring-1 ring-white/10 font-semibold transition" title="Generate a sample animation for the current puzzle">
+                Sample
+              </button>
+            </div>
+
+            <textarea id="animJson" rows="7" class="mt-3 w-full rounded-2xl bg-black/20 ring-1 ring-white/10 px-3 py-2 text-xs text-slate-100/90 outline-none focus:ring-sky-300/40" spellcheck="false" placeholder='Examples:
+[
+  [0,0,0,... 81 numbers],
+  [0,0,1,...]
+]
+
+or
+[
+  {"dt": 400, "grid": [ ...81 numbers... ]},
+  {"dt": 400, "grid": [ ... ]}
+]'></textarea>
+
+            <div class="mt-3 grid grid-cols-3 gap-2">
+              <button id="animLoadBtn" class="rounded-2xl px-3 py-2 bg-white/5 hover:bg-white/10 ring-1 ring-white/10 font-semibold transition">Load</button>
+              <button id="animPlayBtn" class="rounded-2xl px-3 py-2 bg-sky-400/15 hover:bg-sky-400/20 ring-1 ring-sky-300/30 text-sky-100 font-semibold transition">Play</button>
+              <button id="animPauseBtn" class="rounded-2xl px-3 py-2 bg-white/5 hover:bg-white/10 ring-1 ring-white/10 font-semibold transition">Pause</button>
+            </div>
+
+            <div class="mt-2 grid grid-cols-2 gap-2">
+              <button id="animStepBtn" class="rounded-2xl px-3 py-2 bg-white/5 hover:bg-white/10 ring-1 ring-white/10 font-semibold transition" title="Apply the next frame once">Step</button>
+              <button id="animResetBtn" class="rounded-2xl px-3 py-2 bg-rose-400/10 hover:bg-rose-400/15 ring-1 ring-rose-300/25 text-rose-100 font-semibold transition" title="Stop animation and restore the puzzle">Reset</button>
+            </div>
+
+            <div class="mt-3">
+              <div class="flex items-center justify-between">
+                <div class="text-xs text-slate-300">Speed</div>
+                <div id="animSpeedLabel" class="text-xs font-semibold text-slate-100">1.00×</div>
+              </div>
+              <input id="animSpeed" type="range" min="0.25" max="2.5" step="0.05" value="1" class="mt-2 w-full" />
+              <div class="mt-2 text-xs text-slate-300">Frame: <span id="animFrame">0/0</span> · Incorrect: <span id="animErrors">0</span></div>
+              <div id="animHint" class="mt-1 text-[11px] text-slate-400 leading-relaxed">Tip: Frames are compared to the current puzzle’s solution. Final frame should match it.</div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+    </main>
+
+    <footer class="mt-6 sm:mt-8 text-xs text-slate-400">
+      Built as a single-page app. Puzzles are generated in your browser.
+    </footer>
+  </div>
+
+  <!-- Loading modal -->
+  <div id="loading" class="fixed inset-0 hidden items-center justify-center bg-black/50 backdrop-blur-sm">
+    <div class="w-[min(520px,92vw)] rounded-3xl bg-slate-950/70 ring-1 ring-white/10 p-5 shadow-[0_30px_120px_rgba(0,0,0,.6)]">
+      <div class="flex items-center gap-3">
+        <div class="h-10 w-10 rounded-2xl bg-white/10 ring-1 ring-white/10 grid place-items-center">
+          <div class="h-4 w-4 rounded-full border-2 border-slate-200/30 border-t-slate-100 animate-spin"></div>
+        </div>
+        <div>
+          <div class="text-sm text-slate-300">Generating a unique puzzle…</div>
+          <div id="loadingText" class="text-lg font-extrabold tracking-tight">Shuffling digits</div>
+        </div>
+      </div>
+      <div class="mt-4 h-2 rounded-full bg-white/5 ring-1 ring-white/10 overflow-hidden">
+        <div id="loadingBar" class="h-full w-1/3 bg-gradient-to-r from-sky-300/70 to-violet-300/70"></div>
+      </div>
+      <div class="mt-3 text-xs text-slate-400">Tip: Expert can take a moment because it enforces uniqueness.</div>
+    </div>
+  </div>
+
+  <!-- Win modal -->
+  <div id="win" class="fixed inset-0 hidden items-center justify-center bg-black/50 backdrop-blur-sm">
+    <div class="w-[min(520px,92vw)] rounded-3xl bg-slate-950/70 ring-1 ring-white/10 p-5 shadow-[0_30px_120px_rgba(0,0,0,.6)]">
+      <div class="flex items-start justify-between gap-3">
+        <div>
+          <div class="text-xs text-slate-300">Completed</div>
+          <div class="text-2xl font-black tracking-tight">You solved it</div>
+          <div class="mt-1 text-sm text-slate-200/90">Time: <span id="winTime" class="font-semibold text-slate-100">00:00</span></div>
+        </div>
+        <button id="closeWin" class="rounded-2xl px-3 py-2 bg-white/5 hover:bg-white/10 ring-1 ring-white/10 font-semibold transition">Close</button>
+      </div>
+
+      <div class="mt-4 grid grid-cols-2 gap-2">
+        <button id="playAgain" class="rounded-2xl px-4 py-3 bg-sky-400/15 hover:bg-sky-400/20 ring-1 ring-sky-300/30 text-sky-100 font-semibold transition">
+          New game
+        </button>
+        <button id="keepPlaying" class="rounded-2xl px-4 py-3 bg-white/5 hover:bg-white/10 ring-1 ring-white/10 font-semibold transition">
+          Keep board
+        </button>
+      </div>
+
+      <div class="mt-3 text-xs text-slate-400">You can still inspect or take a screenshot after closing.</div>
+    </div>
+  </div>
+
+  <script>
+    // --------- Utilities ---------
+    const $ = (sel, root = document) => root.querySelector(sel);
+    const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+
+    function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
+    function shuffle(arr) {
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+      return arr;
+    }
+    function popcount(x) {
+      // Kernighan
+      let c = 0;
+      while (x) { x &= (x - 1); c++; }
+      return c;
+    }
+    function maskToDigits(mask) {
+      const out = [];
+      for (let d = 1; d <= 9; d++) if (mask & (1 << d)) out.push(d);
+      return out;
+    }
+    function safeInt(n) {
+      const x = Number(n);
+      return Number.isFinite(x) ? (x | 0) : 0;
+    }
+
+    const FULL_MASK = (1 << 10) - 2; // bits 1..9
+
+    const Difficulty = {
+      easy:   { blanks: 36, hints: 4, label: "Easy" },
+      medium: { blanks: 45, hints: 3, label: "Medium" },
+      hard:   { blanks: 53, hints: 2, label: "Hard" },
+      expert: { blanks: 58, hints: 1, label: "Expert" },
+    };
+
+    // --------- Sudoku engine (bitmask solver) ---------
+    function boxIndex(r, c) { return ((r / 3) | 0) * 3 + ((c / 3) | 0); }
+
+    function buildMasksFromGrid(grid) {
+      const row = Array(9).fill(0), col = Array(9).fill(0), box = Array(9).fill(0);
+      for (let i = 0; i < 81; i++) {
+        const v = grid[i];
+        if (!v) continue;
+        const r = (i / 9) | 0, c = i % 9, b = boxIndex(r, c);
+        const bit = 1 << v;
+        row[r] |= bit; col[c] |= bit; box[b] |= bit;
+      }
+      return { row, col, box };
+    }
+
+    function possibleMask(masks, r, c) {
+      const b = boxIndex(r, c);
+      return FULL_MASK & ~(masks.row[r] | masks.col[c] | masks.box[b]);
+    }
+
+    function setCell(grid, masks, i, v) {
+      const r = (i / 9) | 0, c = i % 9, b = boxIndex(r, c);
+      const prev = grid[i];
+      if (prev) {
+        const bitPrev = 1 << prev;
+        masks.row[r] &= ~bitPrev;
+        masks.col[c] &= ~bitPrev;
+        masks.box[b] &= ~bitPrev;
+      }
+      grid[i] = v;
+      if (v) {
+        const bit = 1 << v;
+        masks.row[r] |= bit;
+        masks.col[c] |= bit;
+        masks.box[b] |= bit;
+      }
+    }
+
+    function findBestEmpty(grid, masks) {
+      let bestI = -1;
+      let bestMask = 0;
+      let bestCount = 10;
+      for (let i = 0; i < 81; i++) {
+        if (grid[i] !== 0) continue;
+        const r = (i / 9) | 0, c = i % 9;
+        const m = possibleMask(masks, r, c);
+        const cnt = popcount(m);
+        if (cnt === 0) return { i: -2, mask: 0, count: 0 }; // dead end sentinel
+        if (cnt < bestCount) {
+          bestCount = cnt; bestI = i; bestMask = m;
+          if (cnt === 1) break;
+        }
+      }
+      return { i: bestI, mask: bestMask, count: bestCount };
+    }
+
+    function generateSolvedGrid() {
+      const grid = Array(81).fill(0);
+      const masks = buildMasksFromGrid(grid);
+
+      function backtrack() {
+        const { i, mask } = findBestEmpty(grid, masks);
+        if (i === -2) return false;
+        if (i === -1) return true; // solved
+
+        const digits = maskToDigits(mask);
+        shuffle(digits);
+        for (const d of digits) {
+          setCell(grid, masks, i, d);
+          if (backtrack()) return true;
+          setCell(grid, masks, i, 0);
+        }
+        return false;
+      }
+
+      backtrack();
+      return grid;
+    }
+
+    function countSolutions(grid, limit = 2) {
+      const g = grid.slice();
+      const masks = buildMasksFromGrid(g);
+      let solutions = 0;
+
+      function dfs() {
+        if (solutions >= limit) return;
+        const { i, mask } = findBestEmpty(g, masks);
+        if (i === -2) return;
+        if (i === -1) { solutions++; return; }
+
+        const digits = maskToDigits(mask);
+        for (const d of digits) {
+          setCell(g, masks, i, d);
+          dfs();
+          setCell(g, masks, i, 0);
+          if (solutions >= limit) return;
+        }
+      }
+
+      dfs();
+      return solutions;
+    }
+
+    async function generatePuzzleUniqueSolution(difficultyKey, progressCb) {
+      const cfg = Difficulty[difficultyKey] ?? Difficulty.medium;
+      const solved = generateSolvedGrid();
+      let puzzle = solved.slice();
+
+      const positions = shuffle(Array.from({ length: 81 }, (_, i) => i));
+      let removed = 0;
+      const target = cfg.blanks;
+
+      // Remove while keeping uniqueness.
+      for (let k = 0; k < positions.length; k++) {
+        if (removed >= target) break;
+        const i = positions[k];
+        if (puzzle[i] === 0) continue;
+
+        const backup = puzzle[i];
+        puzzle[i] = 0;
+
+        // Enforce uniqueness
+        const solCount = countSolutions(puzzle, 2);
+        if (solCount !== 1) {
+          puzzle[i] = backup;
+        } else {
+          removed++;
+        }
+
+        if (k % 8 === 0) {
+          progressCb?.({ step: k, removed, target, stage: "Ensuring unique solution" });
+          await new Promise(r => setTimeout(r, 0));
+        }
+      }
+
+      progressCb?.({ step: positions.length, removed, target, stage: "Done" });
+      return { puzzle, solved };
+    }
+
+    // --------- Game state ---------
+    const state = {
+      difficulty: "medium",
+      solved: Array(81).fill(0),
+      grid: Array(81).fill(0),
+      puzzleStart: Array(81).fill(0),
+      fixed: Array(81).fill(false),
+      notes: Array(81).fill(0), // bitmask 1..9
+      selected: 0,
+      notesMode: false,
+      history: [],
+      startAt: 0,
+      timerId: null,
+      hintsLeft: 3,
+      mistakes: 0,
+      highContrast: false,
+      autoConflicts: true,
+      errorMask: Array(81).fill(false),
+      correctMask: Array(81).fill(false),
+      anim: {
+        active: false,
+        frames: [], // {grid:Array(81), dt:number}
+        idx: 0,
+        playing: false,
+        timer: null,
+        speed: 1,
+      }
+    };
+
+    // --------- UI creation ---------
+    const boardEl = $("#board");
+    const padEl = $("#pad");
+
+    function buildBoardUI() {
+      boardEl.innerHTML = "";
+      for (let i = 0; i < 81; i++) {
+        const r = (i / 9) | 0, c = i % 9;
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = [
+          "cell",
+          "rounded-xl",
+          "bg-white/5",
+          "hover:bg-white/7",
+          "ring-1",
+          "ring-white/10",
+          "transition",
+          "duration-150",
+          "ease-out",
+          "flex",
+          "items-center",
+          "justify-center",
+          "relative",
+          "aspect-square",
+          "w-full",
+          "shadow-[0_8px_24px_rgba(0,0,0,.18)]",
+          "focus:outline-none"
+        ].join(" ");
+
+        btn.dataset.index = String(i);
+
+        // Thick borders
+        if (c % 3 === 0) btn.dataset.thickLeft = "1";
+        if (c === 8) btn.dataset.thickRight = "1";
+        if (r % 3 === 0) btn.dataset.thickTop = "1";
+        if (r === 8) btn.dataset.thickBottom = "1";
+
+        const value = document.createElement("span");
+        value.className = "cellValue text-xl sm:text-2xl font-extrabold tracking-tight";
+
+        const notes = document.createElement("span");
+        notes.className = "cellNotes absolute inset-1 grid grid-cols-3 gap-[1px] text-[9px] sm:text-[10px] leading-none text-slate-200/80 hidden";
+        for (let d = 1; d <= 9; d++) {
+          const n = document.createElement("span");
+          n.className = "grid place-items-center rounded-[6px] bg-white/0";
+          n.dataset.digit = String(d);
+          n.textContent = "";
+          notes.appendChild(n);
+        }
+
+        btn.appendChild(value);
+        btn.appendChild(notes);
+
+        btn.addEventListener("click", () => selectCell(i, true));
+        boardEl.appendChild(btn);
+      }
+    }
+
+    function buildPadUI() {
+      padEl.innerHTML = "";
+      for (let n = 1; n <= 9; n++) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "rounded-2xl px-3 py-3 bg-white/5 hover:bg-white/10 ring-1 ring-white/10 font-extrabold text-lg transition";
+        b.textContent = String(n);
+        b.addEventListener("click", () => placeNumber(n));
+        padEl.appendChild(b);
+      }
+    }
+
+    // --------- Rendering ---------
+    function computeConflicts(grid) {
+      const bad = new Set();
+      const seenRow = Array.from({ length: 9 }, () => new Map());
+      const seenCol = Array.from({ length: 9 }, () => new Map());
+      const seenBox = Array.from({ length: 9 }, () => new Map());
+
+      for (let i = 0; i < 81; i++) {
+        const v = grid[i];
+        if (!v) continue;
+        const r = (i / 9) | 0, c = i % 9, b = boxIndex(r, c);
+
+        const mr = seenRow[r];
+        const mc = seenCol[c];
+        const mb = seenBox[b];
+
+        if (mr.has(v)) { bad.add(i); bad.add(mr.get(v)); } else mr.set(v, i);
+        if (mc.has(v)) { bad.add(i); bad.add(mc.get(v)); } else mc.set(v, i);
+        if (mb.has(v)) { bad.add(i); bad.add(mb.get(v)); } else mb.set(v, i);
+      }
+      return bad;
+    }
+
+    function computeIncorrect(grid, solved) {
+      const bad = new Set();
+      for (let i = 0; i < 81; i++) {
+        const v = grid[i];
+        if (!v) continue;
+        if (v !== solved[i]) bad.add(i);
+      }
+      return bad;
+    }
+
+    function clearErrorHighlights() {
+      state.errorMask = Array(81).fill(false);
+    }
+
+    function clearCorrectHighlights() {
+      state.correctMask = Array(81).fill(false);
+    }
+
+    function clearAllCheckHighlights() {
+      clearErrorHighlights();
+      clearCorrectHighlights();
+    }
+
+    function applyErrorHighlights(set) {
+      const mask = Array(81).fill(false);
+      for (const i of set) mask[i] = true;
+      state.errorMask = mask;
+    }
+
+    function applyCorrectHighlights(set) {
+      const mask = Array(81).fill(false);
+      for (const i of set) mask[i] = true;
+      state.correctMask = mask;
+    }
+
+    function render() {
+      const cells = $$("#board .cell");
+      const conflicts = state.autoConflicts ? computeConflicts(state.grid) : new Set();
+      const sel = state.selected;
+      const selVal = state.grid[sel];
+      const selR = (sel / 9) | 0, selC = sel % 9, selB = boxIndex(selR, selC);
+
+      let filled = 0;
+      let incorrectCount = 0;
+      for (let i = 0; i < 81; i++) if (state.errorMask[i]) incorrectCount++;
+
+      for (const btn of cells) {
+        const i = Number(btn.dataset.index);
+        const r = (i / 9) | 0, c = i % 9, b = boxIndex(r, c);
+        const v = state.grid[i];
+        const fixed = state.fixed[i];
+
+        if (v) filled++;
+
+        const isSelected = i === sel;
+        const isPeer = (r === selR || c === selC || b === selB);
+        const isSame = selVal && v === selVal;
+        const isConflict = conflicts.has(i);
+        const isIncorrect = state.errorMask[i];
+        const isCorrect = state.correctMask[i];
+
+        // base background
+        btn.classList.remove(
+          "bg-white/5","bg-white/8","bg-sky-300/10","bg-sky-300/15","bg-violet-300/10",
+          "bg-rose-400/15","ring-rose-300/50",
+          "bg-amber-400/15","ring-amber-300/55",
+          "bg-emerald-400/12","ring-emerald-300/55",
+          "ring-sky-300/50","ring-violet-300/40",
+          "shadow-[0_8px_24px_rgba(0,0,0,.18)]",
+          "shadow-[0_10px_36px_rgba(56,189,248,.12)]",
+          "shadow-[0_10px_36px_rgba(168,85,247,.14)]",
+          "shadow-[0_10px_36px_rgba(244,63,94,.14)]",
+          "shadow-[0_10px_36px_rgba(251,146,60,.14)]",
+          "shadow-[0_10px_36px_rgba(34,197,94,.14)]"
+        );
+
+        btn.classList.add("shadow-[0_8px_24px_rgba(0,0,0,.18)]");
+
+        if (isPeer) btn.classList.add("bg-sky-300/10"); else btn.classList.add("bg-white/5");
+        if (isSame) btn.classList.add("bg-violet-300/10");
+        if (isSelected) {
+          btn.classList.add("bg-sky-300/15", "ring-sky-300/50", "shadow-[0_10px_36px_rgba(56,189,248,.12)]");
+        }
+
+        // Conflicts (duplicates): amber
+        if (isConflict) {
+          btn.classList.add("bg-amber-400/15", "ring-amber-300/55", "shadow-[0_10px_36px_rgba(251,146,60,.14)]");
+        }
+
+        // Correct vs solution (Check/Animation): emerald
+        if (isCorrect && !isIncorrect) {
+          btn.classList.add("bg-emerald-400/12", "ring-emerald-300/55", "shadow-[0_10px_36px_rgba(34,197,94,.14)]");
+        }
+
+        // Incorrect vs solution (Check/Animation): rose (wins over green)
+        if (isIncorrect) {
+          btn.classList.add("bg-rose-400/15", "ring-rose-300/50", "shadow-[0_10px_36px_rgba(244,63,94,.14)]");
+        }
+
+        // text styles
+        btn.style.color = fixed ? (state.highContrast ? "rgba(248,250,252,.98)" : "rgba(241,245,249,.92)") : (state.highContrast ? "rgba(186,230,253,.98)" : "rgba(224,231,255,.92)");
+        btn.style.fontWeight = fixed ? "900" : "800";
+
+        const valueEl = btn.querySelector(".cellValue");
+        const notesEl = btn.querySelector(".cellNotes");
+
+        // Value / notes
+        if (v) {
+          valueEl.textContent = String(v);
+          valueEl.classList.remove("opacity-60");
+          notesEl.classList.add("hidden");
+        } else {
+          valueEl.textContent = "";
+          const mask = state.notes[i];
+          if (mask) {
+            notesEl.classList.remove("hidden");
+            for (const nEl of notesEl.children) {
+              const d = Number(nEl.dataset.digit);
+              const on = (mask & (1 << d)) !== 0;
+              nEl.textContent = on ? String(d) : "";
+              nEl.className = "grid place-items-center rounded-[6px] " + (on ? "bg-white/6" : "bg-white/0");
+            }
+          } else {
+            notesEl.classList.add("hidden");
+          }
+        }
+
+        // Check overlay border indicator
+        if (isIncorrect) btn.dataset.check = "bad";
+        else if (isCorrect) btn.dataset.check = "good";
+        else btn.dataset.check = "";
+
+        // Accessibility
+        btn.setAttribute("aria-label", `Cell ${r+1},${c+1}${fixed ? ", fixed" : ""}${v ? ", value "+v : ""}`);
+      }
+
+      $("#filledCount").textContent = String(filled);
+      $("#mistakeCount").textContent = String(state.mistakes);
+
+      const conflictCount = conflicts.size;
+      const status = state.anim.playing
+        ? `Animating (${state.anim.idx + 1}/${Math.max(1, state.anim.frames.length)})`
+        : (incorrectCount ? `Incorrect (${incorrectCount})` : (conflictCount ? `Conflicts (${conflictCount})` : (filled === 81 ? "Complete" : "In progress")));
+      $("#statusText").textContent = status;
+
+      // If finished correctly, win.
+      if (filled === 81 && conflictCount === 0) {
+        let ok = true;
+        for (let i = 0; i < 81; i++) if (state.grid[i] !== state.solved[i]) { ok = false; break; }
+        if (ok) onWin();
+      }
+    }
+
+    // --------- Selection & actions ---------
+    function selectCell(i, focus = false) {
+      state.selected = clamp(i, 0, 80);
+      if (focus) {
+        const el = boardEl.querySelector(`.cell[data-index="${state.selected}"]`);
+        el?.focus({ preventScroll: true });
+      }
+      render();
+    }
+
+    function pushHistory(i, prevValue, prevNotes) {
+      state.history.push({ i, prevValue, prevNotes });
+      if (state.history.length > 400) state.history.shift();
+    }
+
+    function isEditingBlocked() {
+      if (state.anim.playing) {
+        toast("Animation is playing — pause to edit.", "info");
+        return true;
+      }
+      return false;
+    }
+
+    function placeNumber(n) {
+      if (isEditingBlocked()) return;
+
+      const i = state.selected;
+      if (state.fixed[i]) {
+        toast("That cell is fixed.", "info");
+        return;
+      }
+
+      const prevValue = state.grid[i];
+      const prevNotes = state.notes[i];
+
+      clearAllCheckHighlights();
+
+      if (state.notesMode) {
+        // toggle note
+        const bit = 1 << n;
+        const next = (prevNotes & bit) ? (prevNotes & ~bit) : (prevNotes | bit);
+        pushHistory(i, prevValue, prevNotes);
+        state.notes[i] = next;
+      } else {
+        if (prevValue === n) {
+          // treat as quick toggle (erase)
+          pushHistory(i, prevValue, prevNotes);
+          state.grid[i] = 0;
+          state.notes[i] = 0;
+        } else {
+          pushHistory(i, prevValue, prevNotes);
+          state.grid[i] = n;
+          state.notes[i] = 0;
+
+          // count mistakes (only when value is wrong)
+          if (n !== state.solved[i]) {
+            state.mistakes++;
+          }
+        }
+      }
+
+      render();
+    }
+
+    function eraseCell() {
+      if (isEditingBlocked()) return;
+
+      const i = state.selected;
+      if (state.fixed[i]) {
+        toast("That cell is fixed.", "info");
+        return;
+      }
+      const prevValue = state.grid[i];
+      const prevNotes = state.notes[i];
+      if (prevValue === 0 && prevNotes === 0) return;
+      pushHistory(i, prevValue, prevNotes);
+      state.grid[i] = 0;
+      state.notes[i] = 0;
+      clearAllCheckHighlights();
+      render();
+    }
+
+    function undo() {
+      if (isEditingBlocked()) return;
+
+      const last = state.history.pop();
+      if (!last) {
+        toast("Nothing to undo.", "info");
+        return;
+      }
+      state.grid[last.i] = last.prevValue;
+      state.notes[last.i] = last.prevNotes;
+      state.selected = last.i;
+      clearAllCheckHighlights();
+      render();
+    }
+
+    function toggleNotes() {
+      if (isEditingBlocked()) return;
+
+      state.notesMode = !state.notesMode;
+      $("#notesState").textContent = state.notesMode ? "On" : "Off";
+      $("#notesBtn").classList.toggle("ring-sky-300/40", state.notesMode);
+      $("#notesBtn").classList.toggle("bg-sky-400/15", state.notesMode);
+      $("#notesBtn").classList.toggle("text-sky-100", state.notesMode);
+      toast(state.notesMode ? "Notes mode enabled." : "Notes mode disabled.", "info");
+      render();
+    }
+
+    function checkIncorrect({ silent = false } = {}) {
+      // Highlight both wrong (red) and right (green) entries compared to the solution.
+      const incorrect = new Set();
+      const correct = new Set();
+      for (let i = 0; i < 81; i++) {
+        const v = state.grid[i];
+        if (!v) continue;
+        if (v === state.solved[i]) correct.add(i);
+        else incorrect.add(i);
+      }
+
+      applyErrorHighlights(incorrect);
+      applyCorrectHighlights(correct);
+
+      if (!silent) {
+        if (incorrect.size) toast(`Incorrect: ${incorrect.size} cell(s).`, "bad");
+        else toast("No incorrect entries.", "good");
+      }
+      updateAnimStats();
+      render();
+      return incorrect.size;
+    }
+
+    function giveHint() {
+      if (isEditingBlocked()) return;
+
+      if (state.hintsLeft <= 0) {
+        toast("No hints left.", "info");
+        return;
+      }
+
+      const empties = [];
+      for (let i = 0; i < 81; i++) if (!state.fixed[i] && state.grid[i] === 0) empties.push(i);
+      if (!empties.length) {
+        toast("No empty cells to hint.", "info");
+        return;
+      }
+
+      const i = empties[Math.floor(Math.random() * empties.length)];
+      pushHistory(i, state.grid[i], state.notes[i]);
+      state.grid[i] = state.solved[i];
+      state.notes[i] = 0;
+      state.hintsLeft--;
+      $("#hintsLeft").textContent = String(state.hintsLeft);
+      clearAllCheckHighlights();
+      selectCell(i, true);
+      toast("Hint placed.", "good");
+      render();
+    }
+
+    function solvePuzzle() {
+      if (state.anim.playing) pauseAnimation();
+      if (!confirm("Reveal the full solution?")) return;
+      for (let i = 0; i < 81; i++) {
+        if (!state.fixed[i]) {
+          state.grid[i] = state.solved[i];
+          state.notes[i] = 0;
+        }
+      }
+      clearAllCheckHighlights();
+      toast("Solution revealed.", "info");
+      render();
+    }
+
+    // --------- Timer ---------
+    function formatTime(ms) {
+      const total = Math.floor(ms / 1000);
+      const m = Math.floor(total / 60);
+      const s = total % 60;
+      return String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0");
+    }
+
+    function startTimer() {
+      stopTimer();
+      state.startAt = performance.now();
+      state.timerId = setInterval(() => {
+        $("#timer").textContent = formatTime(performance.now() - state.startAt);
+      }, 250);
+    }
+
+    function stopTimer() {
+      if (state.timerId) clearInterval(state.timerId);
+      state.timerId = null;
+    }
+
+    // --------- Toast ---------
+    let toastTimer = null;
+    function toast(text, type = "info") {
+      const el = $("#toast");
+      el.classList.remove("hidden");
+      el.textContent = text;
+      el.className = "rounded-2xl p-3 ring-1 text-sm";
+
+      const styles = {
+        info: "bg-white/5 ring-white/10 text-slate-200",
+        good: "bg-emerald-400/10 ring-emerald-300/25 text-emerald-100",
+        bad:  "bg-rose-400/10 ring-rose-300/25 text-rose-100",
+      };
+      el.className += " " + (styles[type] || styles.info);
+
+      if (toastTimer) clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { el.classList.add("hidden"); }, 2200);
+    }
+
+    // --------- Animation (JSON frames) ---------
+    function normalizeFrameItem(item) {
+      // Accept:
+      //  - [81 numbers]
+      //  - {grid:[81], dt:ms}
+      //  - {cells:[81], dt:ms}
+      //  - {grid:[81], t:ms}
+      if (Array.isArray(item)) return { grid: item, dt: null, t: null };
+      if (item && typeof item === "object") {
+        return {
+          grid: item.grid ?? item.cells,
+          dt: item.dt ?? item.delay ?? null,
+          t: item.t ?? item.time ?? null,
+        };
+      }
+      return { grid: null, dt: null, t: null };
+    }
+
+    function validateGrid81(arr) {
+      if (!Array.isArray(arr) || arr.length !== 81) return null;
+      const g = new Array(81);
+      for (let i = 0; i < 81; i++) {
+        const v = safeInt(arr[i]);
+        if (v < 0 || v > 9) return null;
+        g[i] = v;
+      }
+      return g;
+    }
+
+    function parseAnimationJSON(text) {
+      const parsed = JSON.parse(text);
+
+      let framesRaw = parsed;
+      let defaultDt = 450;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && Array.isArray(parsed.frames)) {
+        framesRaw = parsed.frames;
+        defaultDt = Number(parsed.defaultDt ?? parsed.dt ?? defaultDt);
+      }
+
+      if (!Array.isArray(framesRaw)) throw new Error("JSON must be an array of frames, or {frames:[...]}.");
+
+      // First pass: normalize
+      const norm = framesRaw.map(normalizeFrameItem);
+      const frames = [];
+
+      let lastT = null;
+      for (let i = 0; i < norm.length; i++) {
+        const it = norm[i];
+        const grid = validateGrid81(it.grid);
+        if (!grid) throw new Error(`Frame ${i+1} must contain 81 numbers (0-9).`);
+
+        let dt = Number(it.dt);
+        if (!Number.isFinite(dt) || dt < 0) dt = null;
+
+        const t = Number(it.t);
+        const hasT = Number.isFinite(t) && t >= 0;
+        if (dt == null && hasT) {
+          if (lastT == null) dt = 0;
+          else dt = Math.max(0, t - lastT);
+        }
+        if (dt == null) dt = defaultDt;
+        lastT = hasT ? t : lastT;
+
+        frames.push({ grid, dt });
+      }
+
+      return frames;
+    }
+
+    function setAnimationActive(active) {
+      state.anim.active = active;
+      // During animation, we usually want “incorrect” highlighting rather than conflict emphasis.
+      state.autoConflicts = !active; // you can still visually spot duplicates via incorrect check; keeps view clean
+      if (!active) {
+        clearAllCheckHighlights();
+      }
+      updateAnimStats();
+      render();
+    }
+
+    function loadAnimationFromTextarea({ silent = false } = {}) {
+      const txt = $("#animJson").value.trim();
+      if (!txt) {
+        toast("Paste JSON frames first.", "info");
+        return false;
+      }
+
+      try {
+        const frames = parseAnimationJSON(txt);
+        state.anim.frames = frames;
+        state.anim.idx = 0;
+        state.anim.playing = false;
+        if (state.anim.timer) { clearTimeout(state.anim.timer); state.anim.timer = null; }
+
+        setAnimationActive(true);
+        applyFrameIndex(0, { silentCheck: true });
+
+        // Validate final frame against solution
+        const last = frames[frames.length - 1];
+        const badLast = computeIncorrect(last.grid, state.solved).size;
+        if (!silent) {
+          toast(`Loaded ${frames.length} frame(s). Final frame incorrect cells: ${badLast}.`, badLast ? "info" : "good");
+        }
+        return true;
+      } catch (e) {
+        console.error(e);
+        toast(e?.message || "Invalid JSON.", "bad");
+        return false;
+      }
+    }
+
+    function applyFrameIndex(idx, { silentCheck = true } = {}) {
+      const frame = state.anim.frames[idx];
+      if (!frame) return;
+      state.anim.idx = idx;
+      state.grid = frame.grid.slice();
+      state.notes = Array(81).fill(0);
+      // keep selection stable
+      state.selected = clamp(state.selected ?? 0, 0, 80);
+      checkIncorrect({ silent: silentCheck });
+      updateAnimStats();
+      render();
+    }
+
+    function scheduleNextFrame() {
+      if (!state.anim.playing) return;
+      const idx = state.anim.idx;
+      const frame = state.anim.frames[idx];
+      const dt = Math.max(0, Number(frame?.dt ?? 0));
+      const speed = Math.max(0.05, Number(state.anim.speed || 1));
+      const wait = Math.round(dt / speed);
+
+      state.anim.timer = setTimeout(() => {
+        if (!state.anim.playing) return;
+        const next = idx + 1;
+        if (next >= state.anim.frames.length) {
+          pauseAnimation();
+          // Ensure final is applied and checked
+          applyFrameIndex(state.anim.frames.length - 1, { silentCheck: true });
+          const incorrect = computeIncorrect(state.grid, state.solved).size;
+          if (incorrect === 0) toast("Animation finished — final frame is correct.", "good");
+          else toast(`Animation finished — final frame still has ${incorrect} incorrect cell(s).`, "info");
+          return;
+        }
+        applyFrameIndex(next, { silentCheck: true });
+        scheduleNextFrame();
+      }, wait);
+    }
+
+    function playAnimation() {
+      if (!state.anim.frames.length) {
+        const ok = loadAnimationFromTextarea();
+        if (!ok) return;
+      }
+      if (state.anim.playing) return;
+
+      state.anim.playing = true;
+      stopTimer();
+      toast("Playing animation…", "info");
+
+      // Ensure current frame applied
+      applyFrameIndex(clamp(state.anim.idx, 0, state.anim.frames.length - 1), { silentCheck: true });
+      scheduleNextFrame();
+      updateAnimStats();
+      render();
+    }
+
+    function pauseAnimation() {
+      if (!state.anim.playing) return;
+      state.anim.playing = false;
+      if (state.anim.timer) { clearTimeout(state.anim.timer); state.anim.timer = null; }
+      toast("Animation paused.", "info");
+      updateAnimStats();
+      render();
+    }
+
+    function stepAnimation() {
+      if (!state.anim.frames.length) {
+        const ok = loadAnimationFromTextarea();
+        if (!ok) return;
+      }
+      pauseAnimation();
+      const next = clamp(state.anim.idx + 1, 0, state.anim.frames.length - 1);
+      applyFrameIndex(next, { silentCheck: true });
+      updateAnimStats();
+      render();
+    }
+
+    function resetAnimation() {
+      pauseAnimation();
+      state.anim.frames = [];
+      state.anim.idx = 0;
+      setAnimationActive(false);
+
+      // restore puzzle
+      state.grid = state.puzzleStart.slice();
+      state.notes = Array(81).fill(0);
+      state.history = [];
+      clearAllCheckHighlights();
+      render();
+      toast("Animation reset. Back to puzzle.", "info");
+    }
+
+    function updateAnimStats() {
+      const total = state.anim.frames.length;
+      const idx = total ? (state.anim.idx + 1) : 0;
+      $("#animFrame").textContent = `${idx}/${total}`;
+      let incorrect = 0;
+      for (let i = 0; i < 81; i++) if (state.errorMask[i]) incorrect++;
+      $("#animErrors").textContent = String(incorrect);
+
+      // Buttons
+      $("#animPauseBtn").disabled = !state.anim.playing;
+      $("#animPauseBtn").classList.toggle("opacity-50", !state.anim.playing);
+      $("#animPlayBtn").disabled = state.anim.playing;
+      $("#animPlayBtn").classList.toggle("opacity-50", state.anim.playing);
+    }
+
+    function makeSampleAnimation() {
+      // Build a simple, friendly sample: start at puzzle, then fill a few correct cells per frame, ending solved.
+      const base = state.puzzleStart.slice();
+      const solved = state.solved.slice();
+
+      // Indices to fill (excluding fixed)
+      const fill = [];
+      for (let i = 0; i < 81; i++) if (!state.fixed[i]) fill.push(i);
+      shuffle(fill);
+
+      const frames = [];
+      const g = base.slice();
+      frames.push({ dt: 0, grid: g.slice() });
+
+      const step = 5;
+      const dt = 260;
+      for (let k = 0; k < fill.length; k += step) {
+        for (let j = k; j < Math.min(fill.length, k + step); j++) {
+          const i = fill[j];
+          g[i] = solved[i];
+        }
+        frames.push({ dt, grid: g.slice() });
+      }
+
+      // Ensure final is fully solved
+      frames.push({ dt: 350, grid: solved.slice() });
+      $("#animJson").value = JSON.stringify(frames, null, 0);
+      toast("Sample frames generated. Hit Load/Play.", "good");
+    }
+
+    // --------- New game flow ---------
+    function setLoading(on, text = "Generating") {
+      const modal = $("#loading");
+      if (!on) {
+        modal.classList.add("hidden");
+        modal.classList.remove("flex");
+        return;
+      }
+      $("#loadingText").textContent = text;
+      $("#loadingBar").style.width = "30%";
+      modal.classList.remove("hidden");
+      modal.classList.add("flex");
+    }
+
+    async function newGame() {
+      pauseAnimation();
+      setAnimationActive(false);
+      $("#animJson").value = "";
+      state.anim.frames = [];
+      state.anim.idx = 0;
+
+      state.difficulty = $("#difficulty").value;
+      const cfg = Difficulty[state.difficulty] ?? Difficulty.medium;
+      state.hintsLeft = cfg.hints;
+      $("#hintsLeft").textContent = String(state.hintsLeft);
+      state.mistakes = 0;
+      state.history = [];
+      state.notes = Array(81).fill(0);
+      state.notesMode = false;
+      $("#notesState").textContent = "Off";
+      clearAllCheckHighlights();
+
+      setLoading(true, `Creating ${cfg.label} puzzle`);
+
+      try {
+        const start = performance.now();
+        const result = await generatePuzzleUniqueSolution(state.difficulty, ({ removed, target, stage }) => {
+          $("#loadingText").textContent = stage;
+          const pct = target ? Math.round(30 + 70 * (removed / target)) : 60;
+          $("#loadingBar").style.width = clamp(pct, 12, 96) + "%";
+        });
+
+        state.grid = result.puzzle.slice();
+        state.puzzleStart = result.puzzle.slice();
+        state.solved = result.solved.slice();
+        state.fixed = state.grid.map(v => v !== 0);
+        state.selected = findFirstEditableIndex();
+
+        startTimer();
+        render();
+        updateAnimStats();
+
+        const ms = Math.round(performance.now() - start);
+        toast(`New ${cfg.label} puzzle ready (${ms} ms).`, "good");
+      } catch (e) {
+        console.error(e);
+        toast("Failed to generate puzzle. Try again.", "bad");
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    function findFirstEditableIndex() {
+      for (let i = 0; i < 81; i++) if (!state.fixed[i]) return i;
+      return 0;
+    }
+
+    // --------- Win / confetti ---------
+    let won = false;
+
+    function onWin() {
+      if (won) return;
+      won = true;
+      pauseAnimation();
+      stopTimer();
+      $("#winTime").textContent = $("#timer").textContent;
+      $("#win").classList.remove("hidden");
+      $("#win").classList.add("flex");
+      startConfetti();
+    }
+
+    function closeWinModal() {
+      $("#win").classList.add("hidden");
+      $("#win").classList.remove("flex");
+      stopConfetti();
+    }
+
+    // Simple confetti
+    const confetti = {
+      running: false,
+      parts: [],
+      raf: null,
+      t0: 0,
+    };
+
+    function startConfetti() {
+      const canvas = $("#confettiCanvas");
+      const ctx = canvas.getContext("2d");
+      const dpr = window.devicePixelRatio || 1;
+
+      function resize() {
+        canvas.width = Math.floor(window.innerWidth * dpr);
+        canvas.height = Math.floor(window.innerHeight * dpr);
+        canvas.style.width = window.innerWidth + "px";
+        canvas.style.height = window.innerHeight + "px";
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
+      resize();
+
+      canvas.classList.remove("hidden");
+      confetti.running = true;
+      confetti.parts = [];
+      confetti.t0 = performance.now();
+
+      const colors = ["#38bdf8", "#a78bfa", "#fb7185", "#34d399", "#fbbf24", "#e2e8f0"];
+      const N = 220;
+      for (let i = 0; i < N; i++) {
+        confetti.parts.push({
+          x: Math.random() * window.innerWidth,
+          y: -20 - Math.random() * window.innerHeight,
+          vx: (-0.5 + Math.random()) * 2.2,
+          vy: 2.2 + Math.random() * 4.2,
+          r: 2 + Math.random() * 4,
+          rot: Math.random() * Math.PI,
+          vr: (-0.5 + Math.random()) * 0.25,
+          color: colors[(Math.random() * colors.length) | 0],
+          life: 0.6 + Math.random() * 0.8,
+        });
+      }
+
+      const onResize = () => resize();
+      window.addEventListener("resize", onResize);
+      confetti._onResize = onResize;
+
+      function frame(t) {
+        if (!confetti.running) return;
+        ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+        const dt = 1 / 60;
+        for (const p of confetti.parts) {
+          p.life -= dt * 0.22;
+          p.x += p.vx * 10;
+          p.y += p.vy * 6;
+          p.rot += p.vr;
+          p.vy += 0.02; // gravity
+          if (p.y > window.innerHeight + 40 || p.life <= 0) {
+            p.x = Math.random() * window.innerWidth;
+            p.y = -30;
+            p.vx = (-0.5 + Math.random()) * 2.4;
+            p.vy = 2.2 + Math.random() * 4.2;
+            p.life = 0.6 + Math.random() * 0.8;
+            p.color = colors[(Math.random() * colors.length) | 0];
+          }
+          ctx.save();
+          ctx.translate(p.x, p.y);
+          ctx.rotate(p.rot);
+          ctx.fillStyle = p.color;
+          ctx.globalAlpha = 0.9;
+          ctx.fillRect(-p.r, -p.r, p.r * 2.2, p.r * 1.1);
+          ctx.restore();
+        }
+        confetti.raf = requestAnimationFrame(frame);
+      }
+      confetti.raf = requestAnimationFrame(frame);
+    }
+
+    function stopConfetti() {
+      confetti.running = false;
+      if (confetti.raf) cancelAnimationFrame(confetti.raf);
+      const canvas = $("#confettiCanvas");
+      canvas.classList.add("hidden");
+      if (confetti._onResize) window.removeEventListener("resize", confetti._onResize);
+    }
+
+    // --------- Theme (contrast) ---------
+    function applyContrast() {
+      state.highContrast = !state.highContrast;
+      // Slightly change strokes/background.
+      document.documentElement.style.setProperty("--stroke", state.highContrast ? "rgba(226,232,240,.55)" : "rgba(148,163,184,.35)");
+      document.documentElement.style.setProperty("--stroke2", state.highContrast ? "rgba(248,250,252,.8)" : "rgba(148,163,184,.5)");
+      toast(state.highContrast ? "High contrast enabled." : "High contrast disabled.", "info");
+      render();
+    }
+
+    // --------- Input handling ---------
+    function moveSelection(dr, dc) {
+      const r = (state.selected / 9) | 0;
+      const c = state.selected % 9;
+      const nr = clamp(r + dr, 0, 8);
+      const nc = clamp(c + dc, 0, 8);
+      selectCell(nr * 9 + nc, true);
+    }
+
+    function onKeyDown(e) {
+      // prevent page scrolling for arrows
+      if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"].includes(e.key)) e.preventDefault();
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        undo();
+        return;
+      }
+
+      const k = e.key.toLowerCase();
+      if (k === "n") { toggleNotes(); return; }
+      if (k === "h") { giveHint(); return; }
+
+      if (e.key === "ArrowUp") return moveSelection(-1, 0);
+      if (e.key === "ArrowDown") return moveSelection(1, 0);
+      if (e.key === "ArrowLeft") return moveSelection(0, -1);
+      if (e.key === "ArrowRight") return moveSelection(0, 1);
+
+      if (e.key === "Backspace" || e.key === "Delete" || e.key === "0") { eraseCell(); return; }
+      if (/^[1-9]$/.test(e.key)) { placeNumber(Number(e.key)); return; }
+    }
+
+    // --------- Wire up ---------
+    function wireUI() {
+      $("#newGameBtn").addEventListener("click", () => { won = false; closeWinModal(); newGame(); });
+      $("#notesBtn").addEventListener("click", toggleNotes);
+      $("#eraseBtn").addEventListener("click", eraseCell);
+      $("#undoBtn").addEventListener("click", undo);
+      $("#checkBtn").addEventListener("click", () => checkIncorrect({ silent: false }));
+      $("#hintBtn").addEventListener("click", giveHint);
+      $("#solveBtn").addEventListener("click", solvePuzzle);
+      $("#themeBtn").addEventListener("click", applyContrast);
+
+      $("#closeWin").addEventListener("click", closeWinModal);
+      $("#keepPlaying").addEventListener("click", closeWinModal);
+      $("#playAgain").addEventListener("click", () => { closeWinModal(); won = false; newGame(); });
+
+      // Animation controls
+      $("#animLoadBtn").addEventListener("click", () => loadAnimationFromTextarea());
+      $("#animPlayBtn").addEventListener("click", playAnimation);
+      $("#animPauseBtn").addEventListener("click", pauseAnimation);
+      $("#animStepBtn").addEventListener("click", stepAnimation);
+      $("#animResetBtn").addEventListener("click", resetAnimation);
+      $("#animSampleBtn").addEventListener("click", makeSampleAnimation);
+      $("#animSpeed").addEventListener("input", (e) => {
+        const v = Number(e.target.value);
+        state.anim.speed = v;
+        $("#animSpeedLabel").textContent = v.toFixed(2) + "×";
+      });
+
+      document.addEventListener("keydown", onKeyDown);
+    }
+
+    // --------- Init ---------
+    buildBoardUI();
+    buildPadUI();
+    wireUI();
+    updateAnimStats();
+
+    // Start with a puzzle
+    (async () => {
+      // select a default cell for focus after load
+      selectCell(0);
+      await newGame();
+      selectCell(state.selected, true);
+    })();
+  </script>
+</body>
+</html>
+
