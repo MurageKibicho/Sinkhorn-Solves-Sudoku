@@ -13,9 +13,10 @@ The code walkthrough is available on [LeetArxiv at this link](https://leetarxiv.
 ### Getting Started
 Note: We use the `sapientinc/sudoku-extreme` dataset from huggingface.
 
-We provide Python code to load the dataset in `SinkhornSolvesSudoku.ipynb`.
+1. We provide Python code to load the dataset in `SinkhornSolvesSudoku.ipynb`.
+   - The Sudoku solver logic is available in C however. Python is used to load the dataset.
 
-The C code implementation is in the file `ParseCSV.c`. We walk you through the code here: [https://leetarxiv.substack.com/p/sinkhorn-solves-sudoku](https://leetarxiv.substack.com/p/sinkhorn-solves-sudoku)
+3. The C code implementation is in the file `ParseCSV.c`. We walk you through the code here: [https://leetarxiv.substack.com/p/sinkhorn-solves-sudoku](https://leetarxiv.substack.com/p/sinkhorn-solves-sudoku)
 
 To run the file, ensure the dataset is available in a folder called `sudoku-data`. Then
 ```
