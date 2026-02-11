@@ -1,4 +1,4 @@
-# Sinkhorn-Solves-Sudokuk
+# Sinkhorn-Solves-Sudoku
 ### Unofficial [LeetArxiv](https://leetarxiv.substack.com/p/sinkhorn-solves-sudoku) implementation of the paper 'Sinkhorn Solves Sudoku' in C with Python starter code
 
 ![Alt text](PaperFrontmatter.png)
